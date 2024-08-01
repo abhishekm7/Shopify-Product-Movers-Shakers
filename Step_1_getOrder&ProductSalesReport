@@ -1,0 +1,109 @@
+function getShopifyReports() {
+  var accessToken = 'shopify admin api access token';  // Replace with your Admin API Access Token
+  var shopName = 'shopify shop name';  // Replace with your Shopify shop name
+  var X = 15;  // Number of days; you can change this value as needed. Try not to fetch more than 60.
+
+  var date = new Date();
+  date.setDate(date.getDate() - X);
+  var createdAtMin = date.toISOString();
+
+  var baseUrl = 'https://' + shopName + '.myshopify.com/admin/api/2024-01/orders.json?status=any&created_at_min=' + createdAtMin + '&limit=250';
+  var orders = [];
+  var hasMoreOrders = true;
+  var url = baseUrl;
+
+  while (hasMoreOrders) {
+    var options = {
+      'method': 'GET',
+      'contentType': 'application/json',
+      'headers': {
+        'X-Shopify-Access-Token': accessToken
+      }
+    };
+
+    var response = UrlFetchApp.fetch(url, options);
+    var data = JSON.parse(response.getContentText());
+    orders = orders.concat(data.orders);
+
+    var linkHeader = response.getHeaders()['Link'];
+    if (linkHeader && linkHeader.includes('rel="next"')) {
+      var match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+      if (match) {
+        url = match[1];
+      } else {
+        hasMoreOrders = false;
+      }
+    } else {
+      hasMoreOrders = false;
+    }
+  }
+
+  // Save orders to the "Orders" sheet
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Orders');
+  if (!sheet) {
+    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('Orders');
+  }
+  sheet.clear();
+
+  if (orders.length > 0) {
+    var headers = Object.keys(orders[0]);
+    sheet.appendRow(headers);
+
+    orders.forEach(function(order) {
+      var row = headers.map(function(header) {
+        return order[header];
+      });
+      sheet.appendRow(row);
+    });
+  } else {
+    sheet.appendRow(['No orders found']);
+  }
+
+  // Modify the ProductSales report
+  var productSales = {};
+  var dates = {};
+
+  orders.forEach(function(order) {
+    var orderDate = order.created_at.split('T')[0]; // Extract date from ISO string
+    dates[orderDate] = true; // Add date to our set of unique dates
+
+    order.line_items.forEach(function(item) {
+      if (!productSales[item.product_id]) {
+        productSales[item.product_id] = {
+          title: item.name,
+          dates: {}
+        };
+      }
+      if (!productSales[item.product_id].dates[orderDate]) {
+        productSales[item.product_id].dates[orderDate] = 0;
+      }
+      productSales[item.product_id].dates[orderDate] += item.quantity;
+    });
+  });
+
+  var productSalesSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ProductSales');
+  if (!productSalesSheet) {
+    productSalesSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('ProductSales');
+  }
+  productSalesSheet.clear();
+
+  // Sort dates
+  var sortedDates = Object.keys(dates).sort();
+
+  // Create headers
+  var headers = ['Product Name'].concat(sortedDates);
+  productSalesSheet.appendRow(headers);
+
+  // Populate data
+  for (var productId in productSales) {
+    var product = productSales[productId];
+    var row = [product.title];
+    sortedDates.forEach(function(date) {
+      row.push(product.dates[date] || 0);
+    });
+    productSalesSheet.appendRow(row);
+  }
+
+  // Autofit columns for better readability
+  productSalesSheet.autoResizeColumns(1, headers.length);
+}

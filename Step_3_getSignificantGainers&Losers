@@ -1,0 +1,95 @@
+function getSignificantGainersLosers() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("ProductSales");
+  var data = sheet.getDataRange().getValues();
+
+  var headers = data[0];
+  var dates = headers.slice(1);
+  var products = data.slice(1);
+
+  var today = new Date();
+  var yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  var yesterdayIndex = dates.findIndex(date => {
+    if (typeof date === 'string') {
+      var parts = date.split('-');
+      var dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+      return dateObj.toDateString() === yesterday.toDateString();
+    } else if (date instanceof Date) {
+      return date.toDateString() === yesterday.toDateString();
+    }
+    return false;
+  });
+
+  if (yesterdayIndex === -1) {
+    Logger.log("Yesterday's data not found. Yesterday was: " + yesterday.toDateString());
+    Logger.log("Available dates: " + dates.map(d => d instanceof Date ? d.toDateString() : d).join(', '));
+    return;
+  }
+
+  var results = products.map(function(product) {
+    var name = product[0];
+    var yesterdaySales = product[yesterdayIndex + 1] || 0;
+
+    var prev3DaysSum = 0;
+    var daysCount = 0;
+    for (var i = 1; i <= 3; i++) {
+      if (yesterdayIndex - i >= 0) {
+        prev3DaysSum += product[yesterdayIndex - i + 1] || 0;
+        daysCount++;
+      }
+    }
+    var prev3DaysAvg = daysCount > 0 ? prev3DaysSum / daysCount : 0;
+
+    // Corrected percentage gain calculation
+    var percentageGain = prev3DaysAvg !== 0 ? ((yesterdaySales - prev3DaysAvg) / prev3DaysAvg) : 0;
+
+    return {
+      name: name,
+      yesterdaySales: yesterdaySales,
+      prev3DaysAvg: prev3DaysAvg,
+      percentageGain: percentageGain
+    };
+  });
+
+  results = results.filter(item => item.prev3DaysAvg >= 2)
+                   .sort((a, b) => b.percentageGain - a.percentageGain);
+
+  var sigGainersLosersSheet = ss.getSheetByName("SignificantGainersLosers");
+  if (!sigGainersLosersSheet) {
+    sigGainersLosersSheet = ss.insertSheet("SignificantGainersLosers");
+  } else {
+    sigGainersLosersSheet.clear();
+  }
+
+  sigGainersLosersSheet.appendRow(["Product Name", "Yesterday's Sales", "Prev 3 Days Avg", "% Gain/Loss"]);
+
+  results.forEach(function(item) {
+    sigGainersLosersSheet.appendRow([
+      item.name,
+      item.yesterdaySales,
+      item.prev3DaysAvg,
+      item.percentageGain
+    ]);
+  });
+
+  sigGainersLosersSheet.getRange(1, 1, 1, 4).setFontWeight("bold");
+  sigGainersLosersSheet.autoResizeColumns(1, 4);
+
+  var lastRow = sigGainersLosersSheet.getLastRow();
+  var percentageRange = sigGainersLosersSheet.getRange(2, 4, lastRow - 1, 1);
+  percentageRange.setNumberFormat("0.00%");
+
+  var rule1 = SpreadsheetApp.newConditionalFormatRule()
+    .whenNumberGreaterThan(0)
+    .setBackground("#b7e1cd")
+    .setRanges([percentageRange])
+    .build();
+  var rule2 = SpreadsheetApp.newConditionalFormatRule()
+    .whenNumberLessThan(0)
+    .setBackground("#f4c7c3")
+    .setRanges([percentageRange])
+    .build();
+  sigGainersLosersSheet.setConditionalFormatRules([rule1, rule2]);
+}
